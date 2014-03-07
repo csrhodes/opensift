@@ -17,14 +17,15 @@
 #include <highgui.h>
 
 #include <stdio.h>
-
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* the maximum number of keypoint NN candidates to check during BBF search */
-#define KDTREE_BBF_MAX_NN_CHKS 200
+#define KDTREE_BBF_MAX_NN_CHKS 100
 
 /* threshold on squared ratio of distances between NN and 2nd NN */
-#define NN_SQ_DIST_RATIO_THR 0.49
-
+#define NN_SQ_DIST_RATIO_THR 0.65
 
 int main( int argc, char** argv )
 {
@@ -36,23 +37,64 @@ int main( int argc, char** argv )
   double d0, d1;
   int n1, n2, k, i, m = 0;
 
+  struct timeval tv;
+  struct timeval tv0;
+  FILE *file;
+  char buf[PATH_MAX];
+  struct stat statbuf;
+
+  sqlite3 *db;
+
   if( argc != 3 )
     fatal_error( "usage: %s <img1> <img2>", argv[0] );
-  
-  img1 = cvLoadImage( argv[1], 1 );
-  if( ! img1 )
-    fatal_error( "unable to load image from %s", argv[1] );
-  img2 = cvLoadImage( argv[2], 1 );
-  if( ! img2 )
-    fatal_error( "unable to load image from %s", argv[2] );
-  stacked = stack_imgs( img1, img2 );
 
-  fprintf( stderr, "Finding features in %s...\n", argv[1] );
-  n1 = sift_features( img1, &feat1 );
-  fprintf( stderr, "Finding features in %s...\n", argv[2] );
-  n2 = sift_features( img2, &feat2 );
-  fprintf( stderr, "Building kd tree...\n" );
+  gettimeofday(&tv0, NULL);
+
+  /* argv[1] */
+  sprintf(buf, "%s.sift", argv[1]);
+  if (!lstat(buf, &statbuf)) {
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d loading features from %s\n", tv.tv_sec, tv.tv_usec, buf);
+    n1 = import_features(buf, FEATURE_LOWE, &feat1);
+  } else {
+    fprintf(stderr, "%d.%06d loading image %s\n", tv.tv_sec, tv.tv_usec, argv[1]);
+    if(!(img1 = cvLoadImage(argv[1], 1))) {
+      fatal_error("unable to load %s", argv[1]);
+    }
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d finding features in %s\n", tv.tv_sec, tv.tv_usec, argv[1]);
+    n1 = sift_features(img1, &feat1);
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d saving features from %s\n", tv.tv_sec, tv.tv_usec, argv[1]);
+    export_features(buf, feat1, n1);
+  }
+
+  /* argv[2] */
+  sprintf(buf, "%s.sift", argv[2]);
+  if (!(lstat(buf, &statbuf))) {
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d loading features from %s\n", tv.tv_sec, tv.tv_usec, buf);
+    n2 = import_features(buf, FEATURE_LOWE, &feat2);
+  } else {
+    fprintf(stderr, "%d.%06d loading image %s\n", tv.tv_sec, tv.tv_usec, argv[2]);
+    if(!(img2 = cvLoadImage(argv[2], 1))) {
+      fatal_error("unable to load %s", argv[2]);
+    }
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d finding features in %s\n", tv.tv_sec, tv.tv_usec, argv[2]);
+    n2 = sift_features(img2, &feat2);
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d saving features from %s\n", tv.tv_sec, tv.tv_usec, argv[2]);
+    export_features(buf, feat2, n2);
+  }
+
+  // stacked = stack_imgs( img1, img2 );
+
+  gettimeofday(&tv, NULL);
+  fprintf( stderr, "%d.%06d building kd tree...\n", tv.tv_sec, tv.tv_usec );
   kd_root = kdtree_build( feat2, n2 );
+  gettimeofday(&tv, NULL);
+  fprintf( stderr, "%d.%06d finding matches...\n", tv.tv_sec, tv.tv_usec);
   for( i = 0; i < n1; i++ )
     {
       feat = feat1 + i;
@@ -63,10 +105,10 @@ int main( int argc, char** argv )
 	  d1 = descr_dist_sq( feat, nbrs[1] );
 	  if( d0 < d1 * NN_SQ_DIST_RATIO_THR )
 	    {
-	      pt1 = cvPoint( cvRound( feat->x ), cvRound( feat->y ) );
-	      pt2 = cvPoint( cvRound( nbrs[0]->x ), cvRound( nbrs[0]->y ) );
-	      pt2.y += img1->height;
-	      cvLine( stacked, pt1, pt2, CV_RGB(255,0,255), 1, 8, 0 );
+	      //pt1 = cvPoint( cvRound( feat->x ), cvRound( feat->y ) );
+	      //pt2 = cvPoint( cvRound( nbrs[0]->x ), cvRound( nbrs[0]->y ) );
+	      //pt2.y += img1->height;
+	      //cvLine( stacked, pt1, pt2, CV_RGB(255,0,255), 1, 8, 0 );
 	      m++;
 	      feat1[i].fwd_match = nbrs[0];
 	    }
@@ -74,8 +116,9 @@ int main( int argc, char** argv )
       free( nbrs );
     }
 
-  fprintf( stderr, "Found %d total matches\n", m );
-  display_big_img( stacked, "Matches" );
+  gettimeofday(&tv, NULL);
+  fprintf( stderr, "%d.%06d found %d total matches\n", tv.tv_sec, tv.tv_usec, m );
+  //  display_big_img( stacked, "Matches" );
   cvWaitKey( 0 );
 
   /* 
@@ -108,9 +151,9 @@ int main( int argc, char** argv )
   }
   */
 
-  cvReleaseImage( &stacked );
-  cvReleaseImage( &img1 );
-  cvReleaseImage( &img2 );
+  //cvReleaseImage( &stacked );
+  //cvReleaseImage( &img1 );
+  //cvReleaseImage( &img2 );
   kdtree_release( kd_root );
   free( feat1 );
   free( feat2 );
