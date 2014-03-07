@@ -21,18 +21,28 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <sqlite3.h>
+
 /* the maximum number of keypoint NN candidates to check during BBF search */
 #define KDTREE_BBF_MAX_NN_CHKS 100
 
 /* threshold on squared ratio of distances between NN and 2nd NN */
 #define NN_SQ_DIST_RATIO_THR 0.65
 
+int match_cb(void *data, int n, char **vals, char **names) {
+  if(1 != n) {
+    fatal_error("n = %d", n);
+  }
+  *((int *) data) = atoi(*vals);
+  return SQLITE_OK;
+}
+
 int main( int argc, char** argv )
 {
   IplImage* img1, * img2, * stacked;
-  struct feature* feat1, * feat2, * feat;
+  struct feature* feat1 = NULL, * feat2 = NULL, * feat;
   struct feature** nbrs;
-  struct kd_node* kd_root;
+  struct kd_node* kd_root = NULL;
   CvPoint pt1, pt2;
   double d0, d1;
   int n1, n2, k, i, m = 0;
@@ -41,15 +51,30 @@ int main( int argc, char** argv )
   struct timeval tv0;
   FILE *file;
   char buf[PATH_MAX];
+  char sql[PATH_MAX];
   struct stat statbuf;
 
-  sqlite3 *db;
+  sqlite3 *db = NULL;
 
+  gettimeofday(&tv0, NULL);
+  fprintf(stderr, "%d.%06d starting\n", tv0.tv_sec, tv0.tv_usec);
   if( argc != 3 )
     fatal_error( "usage: %s <img1> <img2>", argv[0] );
 
-  gettimeofday(&tv0, NULL);
+  if(SQLITE_OK != sqlite3_open_v2("match.sqlite3", &db, SQLITE_OPEN_READWRITE, NULL)) {
+    fatal_error("unable to open match.sqlite3");
+  }
+  /* FIXME prepare statement */
+  sprintf(sql, "select m from matches where file1 = '%s' and file2 = '%s' and max_nn_chks = '%d' and ratio_thr = '%f'", argv[1], argv[2], KDTREE_BBF_MAX_NN_CHKS, NN_SQ_DIST_RATIO_THR);
 
+  if(SQLITE_OK != sqlite3_exec(db, sql, match_cb, &m, &buf)) {
+    fatal_error(buf);
+  }
+  if(m != 0) {
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d, hit db: %d matches\n", tv.tv_sec, tv.tv_usec, m);
+    goto done;
+  }
   /* argv[1] */
   sprintf(buf, "%s.sift", argv[1]);
   if (!lstat(buf, &statbuf)) {
@@ -57,6 +82,7 @@ int main( int argc, char** argv )
     fprintf(stderr, "%d.%06d loading features from %s\n", tv.tv_sec, tv.tv_usec, buf);
     n1 = import_features(buf, FEATURE_LOWE, &feat1);
   } else {
+    gettimeofday(&tv, NULL);
     fprintf(stderr, "%d.%06d loading image %s\n", tv.tv_sec, tv.tv_usec, argv[1]);
     if(!(img1 = cvLoadImage(argv[1], 1))) {
       fatal_error("unable to load %s", argv[1]);
@@ -115,11 +141,18 @@ int main( int argc, char** argv )
 	}
       free( nbrs );
     }
+  /* FIXME prepare statement */
+  sprintf(sql, "insert into matches values('%s','%s','%d','%f','%d')", argv[1], argv[2], KDTREE_BBF_MAX_NN_CHKS, NN_SQ_DIST_RATIO_THR, m);
 
+  if(SQLITE_OK != sqlite3_exec(db, sql, NULL, NULL, &buf)) {
+    fatal_error(buf);
+  }
+  
+ done:
   gettimeofday(&tv, NULL);
   fprintf( stderr, "%d.%06d found %d total matches\n", tv.tv_sec, tv.tv_usec, m );
   //  display_big_img( stacked, "Matches" );
-  cvWaitKey( 0 );
+  //cvWaitKey( 0 );
 
   /* 
      UNCOMMENT BELOW TO SEE HOW RANSAC FUNCTION WORKS
@@ -154,8 +187,9 @@ int main( int argc, char** argv )
   //cvReleaseImage( &stacked );
   //cvReleaseImage( &img1 );
   //cvReleaseImage( &img2 );
-  kdtree_release( kd_root );
-  free( feat1 );
-  free( feat2 );
+  if(db) sqlite3_close_v2(db);
+  if(kd_root) kdtree_release(kd_root);
+  if(feat1) free(feat1);
+  if(feat2) free(feat2);
   return 0;
 }
