@@ -1,5 +1,5 @@
 CC	= gcc
-CFLAGS	+=
+CFLAGS	+= -g -O2
 BIN_DIR = ../bin
 INC_DIR	= ../include
 LIB_DIR	= ../lib
