@@ -37,6 +37,35 @@ int match_cb(void *data, int n, char **vals, char **names) {
   return SQLITE_OK;
 }
 
+int binary_export_features(char *path, struct feature *feat, int32_t n) {
+  static const char *magic = "SIFT";
+  FILE *file = fopen(path, "w+b");
+  fwrite(magic, 4, 1, file);
+  fwrite(&n, sizeof(int32_t), 1, file);
+  fwrite(feat, sizeof(struct feature), n, file);
+  fclose(file);
+  return 0;
+}
+
+int binary_import_features(char *path, struct feature **pfeat) {
+  static const char *magic = "SIFT";
+  char buf[4];
+  int32_t n;
+  FILE *file = fopen(path, "rb");
+  fread(buf, 4, 1, file);
+  if(memcmp(buf, magic, 4)) {
+    return -1; // goto fail
+  }
+  fread(&n, sizeof(int32_t), 1, file);
+  if(n < 0) {
+    return -1; // goto fail
+  }
+  *pfeat = malloc(n * sizeof(struct feature));
+  fread(*pfeat, sizeof(struct feature), n, file);
+  fclose(file);
+  return n;
+}
+
 int main( int argc, char** argv )
 {
   IplImage* img1, * img2, * stacked;
@@ -76,11 +105,27 @@ int main( int argc, char** argv )
     goto done;
   }
   /* argv[1] */
+  sprintf(buf, "%s.siftbin", argv[1]);
+  if (!lstat(buf, &statbuf)) {
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d loading binary features from %s\n", tv.tv_sec, tv.tv_usec, buf);
+    n1 = binary_import_features(buf, &feat1);
+    if(n1 >= 0) {
+      goto f1done;
+    }
+    fatal_error("failed to load binary features from %s", buf);
+  }
   sprintf(buf, "%s.sift", argv[1]);
   if (!lstat(buf, &statbuf)) {
     gettimeofday(&tv, NULL);
-    fprintf(stderr, "%d.%06d loading features from %s\n", tv.tv_sec, tv.tv_usec, buf);
+    fprintf(stderr, "%d.%06d parsing features from %s\n", tv.tv_sec, tv.tv_usec, buf);
     n1 = import_features(buf, FEATURE_LOWE, &feat1);
+    if(n1 >= 0) {
+      sprintf(buf, "%s.siftbin", argv[1]);
+      binary_export_features(buf, feat1, n1);
+      goto f1done;
+    }
+    fatal_error("failed to parse features from %s", buf);
   } else {
     gettimeofday(&tv, NULL);
     fprintf(stderr, "%d.%06d loading image %s\n", tv.tv_sec, tv.tv_usec, argv[1]);
@@ -92,15 +137,36 @@ int main( int argc, char** argv )
     n1 = sift_features(img1, &feat1);
     gettimeofday(&tv, NULL);
     fprintf(stderr, "%d.%06d saving features from %s\n", tv.tv_sec, tv.tv_usec, argv[1]);
+    sprintf(buf, "%s.siftbin", argv[1]);
+    binary_export_features(buf, feat1, n1);
+    sprintf(buf, "%s.sift", argv[1]);
     export_features(buf, feat1, n1);
+    goto f1done;
   }
 
+ f1done:
   /* argv[2] */
+  sprintf(buf, "%s.siftbin", argv[2]);
+  if (!lstat(buf, &statbuf)) {
+    gettimeofday(&tv, NULL);
+    fprintf(stderr, "%d.%06d loading binary features from %s\n", tv.tv_sec, tv.tv_usec, buf);
+    n2 = binary_import_features(buf, &feat2);
+    if(n2 >= 0) {
+      goto f2done;
+    }
+    fatal_error("failed to load binary features from %s", buf);
+  }
   sprintf(buf, "%s.sift", argv[2]);
   if (!(lstat(buf, &statbuf))) {
     gettimeofday(&tv, NULL);
-    fprintf(stderr, "%d.%06d loading features from %s\n", tv.tv_sec, tv.tv_usec, buf);
+    fprintf(stderr, "%d.%06d parsing features from %s\n", tv.tv_sec, tv.tv_usec, buf);
     n2 = import_features(buf, FEATURE_LOWE, &feat2);
+    if(n2 >= 0) {
+      sprintf(buf, "%s.siftbin", argv[2]);
+      binary_export_features(buf, feat2, n2);
+      goto f2done;
+    }
+    fatal_error("failed to parse features from %s", buf);
   } else {
     fprintf(stderr, "%d.%06d loading image %s\n", tv.tv_sec, tv.tv_usec, argv[2]);
     if(!(img2 = cvLoadImage(argv[2], 1))) {
@@ -111,9 +177,13 @@ int main( int argc, char** argv )
     n2 = sift_features(img2, &feat2);
     gettimeofday(&tv, NULL);
     fprintf(stderr, "%d.%06d saving features from %s\n", tv.tv_sec, tv.tv_usec, argv[2]);
+    sprintf(buf, "%s.siftbin", argv[2]);
+    binary_export_features(buf, feat2, n2);
+    sprintf(buf, "%s.sift", argv[2]);
     export_features(buf, feat2, n2);
+    goto f2done;
   }
-
+ f2done:
   // stacked = stack_imgs( img1, img2 );
 
   gettimeofday(&tv, NULL);
